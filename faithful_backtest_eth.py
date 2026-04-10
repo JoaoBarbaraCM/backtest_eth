@@ -114,11 +114,8 @@ from allocator_bnb_faithful_eth import allocator, IDLE_MARKET_ID
 # ══════════════════════════════════════════════════════════════════════════════
 # Edit these values before running.
 
-NAME = 'BEAR'
-
 # Total capital to allocate (raw token units).
 # USDC has 6 decimals: 1e11 = 100 000 USDC (100 k USDC).
-A_INITIAL = 1e11
 
 # Seconds between consecutive optimisations.
 # 3600 = hourly (≈ 8 760 optimisations per year).
@@ -140,8 +137,6 @@ FLUSH_EVERY = 200
 # Optional time window for the simulation.
 # Set to None to use the full history, or a "YYYY-MM-DD" string to restrict.
 # Times are interpreted as UTC midnight.
-START_DATE = '2025-10-15'   # e.g. "2024-01-01"
-END_DATE   = None   # e.g. "2024-12-31"
 
 # Full 66-character Morpho Blue market IDs (Base chain, USDC loan token).
 MARKETS = [
@@ -168,13 +163,6 @@ ID_TO_LABEL   = dict(zip(MARKETS, LABELS))
 SCRIPT_DIR        = pathlib.Path(__file__).parent
 STATES_FILE       = SCRIPT_DIR / '..' / 'build_states' / "backtest_states.parquet"
 MARKET_STATES_DIR = SCRIPT_DIR / '..' / "market_timestamps"
-
-if NAME:
-    OUT_NAME = f"{NAME}_compound_backtest_Assets_{A_INITIAL}_From_{START_DATE}_To_{END_DATE}"
-else:
-    OUT_NAME = f"compound_backtest_Assets_{A_INITIAL}_From_{START_DATE}_To_{END_DATE}"
-
-OUT_DIR = SCRIPT_DIR / OUT_NAME
 
 
 
@@ -494,7 +482,7 @@ def _parse_date(s):
     return float(timegm(_time.strptime(s, "%Y-%m-%d")))
 
 
-def build_opt_schedule(df_states, verbose=True):
+def build_opt_schedule(df_states, START_DATE, END_DATE, verbose=True):
     """
     Generate the list of Unix timestamps at which the optimizer fires.
     Steps from the global first event by OPT_INTERVAL_SEC until history ends.
@@ -594,7 +582,7 @@ def _build_market_states_for_opt(df_states, t_k, active_labels):
 
 def run_simulation(df_states, market_events, market_ts_arr,
                    market_first_ts, market_own_ts_arr, market_own_R0_arr,
-                   opt_times, verbose=True):
+                   opt_times, A_INITIAL, verbose=True):
     """
     Core simulation loop.
 
@@ -876,7 +864,7 @@ def run_simulation(df_states, market_events, market_ts_arr,
 # STAGE 5 — Write Output Files
 # ══════════════════════════════════════════════════════════════════════════════
 
-def write_outputs(opt_rows, path_rows, adverse_rows, verbose=True):
+def write_outputs(opt_rows, path_rows, adverse_rows, OUT_DIR, verbose=True):
     """Convert result lists to PyArrow tables and write to Parquet."""
     OUT_DIR.mkdir(exist_ok=True)
 
@@ -930,7 +918,19 @@ def write_outputs(opt_rows, path_rows, adverse_rows, verbose=True):
 # Entry point
 # ══════════════════════════════════════════════════════════════════════════════
 
-def main():
+def main(name_, assets_, start_, end_):
+    NAME = name_
+    A_INITIAL = assets_ * 1_000_000
+    START_DATE = start_
+    END_DATE = end_
+
+    if NAME:
+        OUT_NAME = f"{NAME}_compound_backtest_Assets_{A_INITIAL}_From_{START_DATE}_To_{END_DATE}"
+    else:
+        OUT_NAME = f"compound_backtest_Assets_{A_INITIAL}_From_{START_DATE}_To_{END_DATE}"
+
+    OUT_DIR = SCRIPT_DIR / OUT_NAME
+
     print("=" * 70)
     print(f"  Faithful Backtest: {OUT_NAME}")
     print(f"  A_initial = {A_INITIAL:.2e} raw units  |  "
@@ -946,18 +946,18 @@ def main():
         build_timeline_index(df_states, market_events)
 
     # Stage 3
-    opt_times = build_opt_schedule(df_states)
+    opt_times = build_opt_schedule(df_states, START_DATE, END_DATE)
 
     # Stage 4
     print(f"\n[Stage 4] Running simulation ({len(opt_times):,} optimisations) …")
     opt_rows, path_rows, adverse_rows = run_simulation(
         df_states, market_events, market_ts_arr,
         market_first_ts, market_own_ts_arr, market_own_R0_arr,
-        opt_times,
+        opt_times, A_INITIAL
     )
 
     # Stage 5
-    write_outputs(opt_rows, path_rows, adverse_rows)
+    write_outputs(opt_rows, path_rows, adverse_rows, OUT_DIR)
 
     # ── summary ────────────────────────────────────────────────────────────
     if opt_rows:
