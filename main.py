@@ -25,6 +25,16 @@ CONFIG = [
            'start_date':'2025-04-10',
            'end_date':'2025-10-15',
            'assets': 100_000
+           },
+           {'name':'BEAR',
+           'start_date':'2025-10-15',
+           'end_date':None,
+           'assets' : 1_000_000
+           },
+           {'name':'BULL',
+           'start_date':'2025-04-10',
+           'end_date':'2025-10-15',
+           'assets': 1_000_000
            }
           ]
 
