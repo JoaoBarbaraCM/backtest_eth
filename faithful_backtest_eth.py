@@ -421,9 +421,9 @@ def _synthetic_exchange_rate(lbl, t_k,
     real_rate     = float(row["supply_exchange_rate"])
     avail_liq     = float(row["available_liquidity"])
 
-    # If no shares exist, the rate is meaningless; return the stored value.
-    if shares_total <= 0 or Sm <= 0:
-        return real_rate, avail_liq, t_last
+    # If no shares exist yet, the market hasn't launched — treat as inactive.
+    if shares_total <= 0 or Sm <= 0 or math.isnan(real_rate):
+        return None, None, None
 
     elapsed = t_k - t_last
     if elapsed <= 0.0:
@@ -561,7 +561,7 @@ def _build_market_states_for_opt(df_states, t_k, active_labels):
 
         if any(math.isnan(v) for v in (B, Sm, R0)):
             continue
-        if Sm <= 0 or R0 <= 0:
+        if Sm <= 0 or R0 < 1e-9:   # 1e-9 /s ≈ 0.003% APY — filters missing IRM data
             continue
 
         # ── Propagate R0 from snap_ts to t_k ──────────────────────────────
@@ -652,7 +652,7 @@ def run_simulation(df_states, market_events, market_ts_arr,
                 market_events, market_ts_arr,
                 market_own_ts_arr, market_own_R0_arr,
             )
-            if synth_rate is None:
+            if synth_rate is None or math.isnan(synth_rate):
                 current_assets[lbl] = 0.0
                 current_rates[lbl]  = None
                 current_liq[lbl]    = None
@@ -791,7 +791,21 @@ def run_simulation(df_states, market_events, market_ts_arr,
         solver_ms = (time.perf_counter() - t_solver_start) * 1e3
 
         if best_alloc is None:
-            _log(f"  [t={ts_utc(t_k)}] infeasible — holding positions", log_file)
+            total_locked = sum(x_min_per_market.get(m['Id'], 0.0) for m in mkt_states)
+            mkt_summary  = ', '.join(
+                f"{m['Id'][:8]}.. B={m['B']:.2e} Sm={m['Sm']:.2e} "
+                f"R0={m['R0']:.3e} U={m['B']/m['Sm']:.3f}"
+                for m in mkt_states
+            )
+            _log(
+                f"  [t={ts_utc(t_k)}] infeasible — holding positions"
+                f"  |  n_active={n_active}"
+                f"  |  A_total={A_total:.4e}"
+                f"  |  total_locked={total_locked:.4f}"
+                f"  |  x_min={x_min_per_market}"
+                f"  |  markets={{ {mkt_summary} }}",
+                log_file,
+            )
             t_prev = t_k
             continue
 
