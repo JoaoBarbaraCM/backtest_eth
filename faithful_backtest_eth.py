@@ -580,9 +580,17 @@ def _build_market_states_for_opt(df_states, t_k, active_labels):
     return states
 
 
+def _log(msg, log_file=None):
+    """Write msg to console via tqdm.write and optionally to a log file."""
+    tqdm.write(msg)
+    if log_file is not None:
+        log_file.write(msg + "\n")
+        log_file.flush()
+
+
 def run_simulation(df_states, market_events, market_ts_arr,
                    market_first_ts, market_own_ts_arr, market_own_R0_arr,
-                   opt_times, A_INITIAL, verbose=True):
+                   opt_times, A_INITIAL, verbose=True, log_file=None):
     """
     Core simulation loop.
 
@@ -778,12 +786,12 @@ def run_simulation(df_states, market_events, market_ts_arr,
                 include_idle=True,
             )
         except Exception as exc:
-            tqdm.write(f"  [t={ts_utc(t_k)}] allocator error: {exc}")
+            _log(f"  [t={ts_utc(t_k)}] allocator error: {exc}", log_file)
             best_alloc, obj_val = None, math.inf
         solver_ms = (time.perf_counter() - t_solver_start) * 1e3
 
         if best_alloc is None:
-            tqdm.write(f"  [t={ts_utc(t_k)}] infeasible — holding positions")
+            _log(f"  [t={ts_utc(t_k)}] infeasible — holding positions", log_file)
             t_prev = t_k
             continue
 
@@ -864,12 +872,18 @@ def run_simulation(df_states, market_events, market_ts_arr,
 # STAGE 5 — Write Output Files
 # ══════════════════════════════════════════════════════════════════════════════
 
-def write_outputs(opt_rows, path_rows, adverse_rows, OUT_DIR, verbose=True):
+def write_outputs(opt_rows, path_rows, adverse_rows, OUT_DIR, verbose=True, log_file=None):
     """Convert result lists to PyArrow tables and write to Parquet."""
     OUT_DIR.mkdir(exist_ok=True)
 
+    def _print(msg):
+        print(msg)
+        if log_file is not None:
+            log_file.write(msg + "\n")
+            log_file.flush()
+
     if verbose:
-        print(f"\n[Stage 5] Writing output to {OUT_DIR} …")
+        _print(f"\n[Stage 5] Writing output to {OUT_DIR} …")
 
     if opt_rows:
         opt_file = OUT_DIR / "optimization_log.parquet"
@@ -879,8 +893,8 @@ def write_outputs(opt_rows, path_rows, adverse_rows, OUT_DIR, verbose=True):
             opt_file, compression="snappy"
         )
         if verbose:
-            print(f"    optimization_log.parquet  {len(df_opt):,} rows  "
-                  f"({opt_file.stat().st_size/1e6:.1f} MB)")
+            _print(f"    optimization_log.parquet  {len(df_opt):,} rows  "
+                   f"({opt_file.stat().st_size/1e6:.1f} MB)")
 
     if path_rows:
         path_file = OUT_DIR / "asset_path.parquet"
@@ -890,8 +904,8 @@ def write_outputs(opt_rows, path_rows, adverse_rows, OUT_DIR, verbose=True):
             path_file, compression="snappy"
         )
         if verbose:
-            print(f"    asset_path.parquet         {len(df_path):,} rows  "
-                  f"({path_file.stat().st_size/1e6:.1f} MB)")
+            _print(f"    asset_path.parquet         {len(df_path):,} rows  "
+                   f"({path_file.stat().st_size/1e6:.1f} MB)")
 
     adv_file = OUT_DIR / "adverse_events.parquet"
     if adverse_rows:
@@ -901,17 +915,17 @@ def write_outputs(opt_rows, path_rows, adverse_rows, OUT_DIR, verbose=True):
             adv_file, compression="snappy"
         )
         if verbose:
-            print(f"    adverse_events.parquet     {len(df_adv):,} events")
+            _print(f"    adverse_events.parquet     {len(df_adv):,} events")
             bd  = df_adv[df_adv["event_type"] == "bad_debt"]
             lkd = df_adv[df_adv["event_type"] == "locked_funds"]
-            print(f"      bad_debt events:    {len(bd):,}")
-            print(f"      locked_funds events:{len(lkd):,}")
+            _print(f"      bad_debt events:    {len(bd):,}")
+            _print(f"      locked_funds events:{len(lkd):,}")
             if len(bd):
-                print(f"      total bad debt loss: "
-                      f"{bd['amount_affected'].sum():.4f} (raw units)")
+                _print(f"      total bad debt loss: "
+                       f"{bd['amount_affected'].sum():.4f} (raw units)")
     else:
         if verbose:
-            print("    adverse_events.parquet     0 events (clean run)")
+            _print("    adverse_events.parquet     0 events (clean run)")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -930,13 +944,22 @@ def main(name_, assets_, start_, end_):
         OUT_NAME = f"compound_backtest_Assets_{A_INITIAL}_From_{START_DATE}_To_{END_DATE}"
 
     OUT_DIR = SCRIPT_DIR / OUT_NAME
+    OUT_DIR.mkdir(exist_ok=True)
 
-    print("=" * 70)
-    print(f"  Faithful Backtest: {OUT_NAME}")
-    print(f"  A_initial = {A_INITIAL:.2e} raw units  |  "
-          f"interval = {OPT_INTERVAL_SEC} s  |  "
-          f"idle market: enabled")
-    print("=" * 70)
+    log_path = OUT_DIR / "run.log"
+    log_file = open(log_path, "w", buffering=1)   # line-buffered
+
+    def _print(msg):
+        print(msg)
+        log_file.write(msg + "\n")
+        log_file.flush()
+
+    _print("=" * 70)
+    _print(f"  Faithful Backtest: {OUT_NAME}")
+    _print(f"  A_initial = {A_INITIAL:.2e} raw units  |  "
+           f"interval = {OPT_INTERVAL_SEC} s  |  "
+           f"idle market: enabled")
+    _print("=" * 70)
 
     # Stage 1
     df_states, block_arr, time_arr, market_events = load_stage1()
@@ -949,15 +972,15 @@ def main(name_, assets_, start_, end_):
     opt_times = build_opt_schedule(df_states, START_DATE, END_DATE)
 
     # Stage 4
-    print(f"\n[Stage 4] Running simulation ({len(opt_times):,} optimisations) …")
+    _print(f"\n[Stage 4] Running simulation ({len(opt_times):,} optimisations) …")
     opt_rows, path_rows, adverse_rows = run_simulation(
         df_states, market_events, market_ts_arr,
         market_first_ts, market_own_ts_arr, market_own_R0_arr,
-        opt_times, A_INITIAL
+        opt_times, A_INITIAL, log_file=log_file
     )
 
     # Stage 5
-    write_outputs(opt_rows, path_rows, adverse_rows, OUT_DIR)
+    write_outputs(opt_rows, path_rows, adverse_rows, OUT_DIR, log_file=log_file)
 
     # ── summary ────────────────────────────────────────────────────────────
     if opt_rows:
@@ -967,14 +990,17 @@ def main(name_, assets_, start_, end_):
         total_return = (final_assets - init_assets) / init_assets * 100
         n_days       = (opt_times[-1] - opt_times[0]) / 86400
 
-        print(f"\n{'─'*70}")
-        print(f"  Initial capital : {init_assets:.4e}")
-        print(f"  Final capital   : {final_assets:.4e}")
-        print(f"  Total return    : {total_return:.2f}%  over {n_days:.0f} days")
-        print(f"  Annualised      : {total_return / n_days * 365:.2f}%")
-        print(f"  Optimisations   : {len(opt_rows):,}")
-        print(f"  Adverse events  : {len(adverse_rows):,}")
-        print(f"{'─'*70}")
+        _print(f"\n{'─'*70}")
+        _print(f"  Initial capital : {init_assets:.4e}")
+        _print(f"  Final capital   : {final_assets:.4e}")
+        _print(f"  Total return    : {total_return:.2f}%  over {n_days:.0f} days")
+        _print(f"  Annualised      : {total_return / n_days * 365:.2f}%")
+        _print(f"  Optimisations   : {len(opt_rows):,}")
+        _print(f"  Adverse events  : {len(adverse_rows):,}")
+        _print(f"{'─'*70}")
+
+    log_file.close()
+    print(f"  Log saved to: {log_path}")
 
 
 if __name__ == "__main__":
